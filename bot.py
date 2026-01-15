@@ -217,12 +217,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         system_instruction = (
-            f"Eres un experto analista legal. Tienes acceso a {len(file_names)} documentos: {', '.join(file_names)}. "
-            "Tu tarea es responder a la consulta del usuario sintetizando la información de estos documentos. "
-            "1. Si la respuesta está en un solo documento, cítalo. "
-            "2. Si requiere cruzar información de varios, hazlo coherentemente. "
-            "3. Mantén una redacción profesional, clara y estructurada (estilo NotebookLM). "
-            "4. Usa el contexto de la conversación anterior."
+            f"Actúa como un **Experto Analista Legal Senior**. Tienes a tu disposición {len(file_names)} documentos: {', '.join(file_names)}.\n"
+            "**Tu Misión:** Proveer respuestas profundas, precisas y excelentemente redactadas basándote EXCLUSIVAMENTE en la información de estos documentos.\n\n"
+            "**Directrices de Calidad:**\n"
+            "1. **Razonamiento Profundo:** No te limites a citar. Analiza la intención, el contexto y las implicaciones de lo que lees.\n"
+            "2. **Síntesis Cruzada:** Si la respuesta abarca varios documentos, integra la información de forma fluida. No listes documentos por separado a menos que sea necesario para comparar.\n"
+            "3. **Estilo Profesional:** Usa un tono formal, claro y jurídico. Estructura tu respuesta con títulos, viñetas y párrafos bien formados.\n"
+            "4. **Honestidad Intelectual:** Si la información no está en los documentos, dilo claramente. No inventes.\n"
+            "5. **Cero Metadatos:** Entrega solo la respuesta final, lista para ser usada en un informe oficial."
         )
         
         chat_context = []
@@ -231,31 +233,36 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         full_prompt = (
             f"{system_instruction}\n"
-            "Historial de Chat (Contexto):\n" + "\n".join(chat_context) + "\n"
-            f"Consulta actual: {text}\n"
+            "--- Historial de Conversación ---\n" + "\n".join(chat_context) + "\n"
+            "---------------------------------\n"
+            f"**CONSULTA DEL CLIENTE:** {text}\n"
+            "**RESPUESTA DEL EXPERTO:**"
         )
 
-        # Add prompt to end of list
         request_content.append(full_prompt)
 
-        # Fallback Strategy
+        # Prioritize 'PRO' models for higher intelligence, then 'FLASH' for speed/backup
         model_candidates = [
-            'gemini-1.5-flash',
-            'gemini-1.5-flash-001',
-            'gemini-1.5-flash-latest',
-            'gemini-1.5-pro',
-            'gemini-1.5-pro-001',
-            'gemini-2.0-flash-exp',
-            'gemini-pro'
+            'gemini-1.5-pro',          # Best reasoning
+            'gemini-1.5-pro-001',      # Stable reasoning
+            'gemini-2.0-flash-exp',    # New experimental (smart & fast)
+            'gemini-1.5-flash',        # Fallback
+            'gemini-1.5-flash-latest'
         ]
 
         response = None
         used_model = None
         last_error = None
 
+        # Configuration for better quality
+        gen_config = genai.GenerationConfig(
+            temperature=0.3, # Lower temperature for more precise/analytical facts
+            max_output_tokens=4000 # Allow long, detailed responses
+        )
+
         for model_name in model_candidates:
             try:
-                model = genai.GenerativeModel(model_name)
+                model = genai.GenerativeModel(model_name, generation_config=gen_config)
                 response = model.generate_content(request_content)
                 used_model = model_name
                 break
@@ -266,7 +273,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not response:
             raise last_error or Exception("No valid models found.")
 
-        answer = response.text + f"\n\n_(Fuente: {len(file_names)} docs | Modelo: {used_model})_"
+        # Clean answer, no metadata appended
+        answer = response.text 
         
         log_interaction(user_id, 'assistant', answer)
         
@@ -278,7 +286,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logging.error(f"Generation Error: {e}")
-        await update.message.reply_text(f"Error generando respuesta: {str(e)}")
+        await update.message.reply_text(f"Lo siento, hubo un error técnico procesando tu solicitud: {str(e)}")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in user_sessions:
