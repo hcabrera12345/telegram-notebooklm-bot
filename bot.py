@@ -181,6 +181,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
 
     try:
+        logging.info("--- Processing Message (Version 2.0 - Fix Applied) ---")
+        file_ref = None
         history = get_chat_history(user_id, session['file_hash'])
         log_interaction(user_id, session['file_hash'], 'user', text)
         
