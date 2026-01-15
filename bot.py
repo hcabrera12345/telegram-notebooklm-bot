@@ -177,7 +177,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history = get_chat_history(user_id, session['file_hash'])
         log_interaction(user_id, session['file_hash'], 'user', text)
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         
         # Retrieve the File object using the ID/Name
         # If we have an old record with full URI, extraction might fail, 
