@@ -248,7 +248,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = response.text + f"\n\n_(Generado con {used_model})_"
         
         log_interaction(user_id, session['file_hash'], 'assistant', answer)
-        await update.message.reply_text(answer, parse_mode='Markdown')
+        
+        try:
+             await update.message.reply_text(answer, parse_mode='Markdown')
+        except Exception as e:
+            logging.warning(f"Markdown failed, sending plain text: {e}")
+            await update.message.reply_text(answer, parse_mode=None)
 
     except Exception as e:
         logging.error(f"Generation Error: {e}")
