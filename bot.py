@@ -184,56 +184,42 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history = get_chat_history(user_id, session['file_hash'])
         log_interaction(user_id, session['file_hash'], 'user', text)
         
-        # DEBUG: List models if generation fails often
-        # for m in genai.list_models():
-        #     if 'generateContent' in m.supported_generation_methods:
-        #         print(m.name)
-        
-        # Using specific version 'gemini-1.5-flash-001' to avoid alias issues
-        model = genai.GenerativeModel('gemini-1.5-flash-001')
-        
-        # Retrieve the File object using the ID/Name
-        # If we have an old record with full URI, extraction might fail, 
-        # so this is a fix going forward. Ideally user clears old files.
-        try:
-            gemini_id = session.get('gemini_id') or session.get('gemini_uri') # Fallback if key differs
-            # Simple cleanup if it was a full URI (quick fix for migration)
-            if gemini_id and "https://" in gemini_id:
-                # Attempt to extract files/xxxx part
-                # URI: .../v1beta/files/xxxxx
-                if "/files/" in gemini_id:
-                    gemini_id = "files/" + gemini_id.split("/files/")[-1]
-            
-            file_ref = genai.get_file(gemini_id)
-        except Exception as file_err:
-             logging.error(f"File Ref Error: {file_err}")
-             await update.message.reply_text("Error recuperando el archivo de Gemini. Prueba /clear y sube de nuevo.")
-             return
+        # List of models to try in order of preference (Fastest -> Most Capable -> Legacy)
+        model_candidates = [
+            'gemini-1.5-flash',
+            'gemini-1.5-flash-001',
+            'gemini-1.5-flash-latest',
+            'gemini-1.5-pro',
+            'gemini-1.5-pro-001'
+        ]
 
-        system_instruction = (
-            f"Eres un experto analista legal. Documento: '{session['file_name']}'. "
-            "Responde basándote en el documento."
-        )
-        
-        chat_context = []
-        for role, msg in history:
-            chat_context.append(f"{'U' if role == 'user' else 'A'}: {msg}")
-        
-        full_prompt = (
-            f"{system_instruction}\n"
-            "Historial:\n" + "\n".join(chat_context) + "\n"
-            f"Pregunta: {text}\n"
-        )
+        response = None
+        used_model = None
+        last_error = None
 
-        response = model.generate_content([file_ref, full_prompt])
-        answer = response.text
+        for model_name in model_candidates:
+            try:
+                logging.info(f"Trying model: {model_name}")
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content([file_ref, full_prompt])
+                used_model = model_name
+                break # Success!
+            except Exception as e:
+                logging.warning(f"Model {model_name} failed: {e}")
+                last_error = e
+                # Continue to next model
+        
+        if not response:
+            raise last_error or Exception("No valid models found.")
+
+        answer = response.text + f"\n\n_(Generado con {used_model})_"
         
         log_interaction(user_id, session['file_hash'], 'assistant', answer)
         await update.message.reply_text(answer, parse_mode='Markdown')
 
     except Exception as e:
         logging.error(f"Generation Error: {e}")
-        await update.message.reply_text("Error generando respuesta. Intenta reformular.")
+        await update.message.reply_text(f"Error generando respuesta: {str(e)}\nIntenta subir el archivo de nuevo.")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in user_sessions:
