@@ -184,6 +184,35 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history = get_chat_history(user_id, session['file_hash'])
         log_interaction(user_id, session['file_hash'], 'user', text)
         
+        # --- Logic Restored: Retrieve File & Build Prompt ---
+        try:
+            gemini_id = session.get('gemini_id') or session.get('gemini_uri')
+            if gemini_id and "https://" in gemini_id:
+                if "/files/" in gemini_id:
+                    gemini_id = "files/" + gemini_id.split("/files/")[-1]
+            
+            file_ref = genai.get_file(gemini_id)
+        except Exception as file_err:
+             logging.error(f"File Ref Error: {file_err}")
+             await update.message.reply_text("Error recuperando el archivo de Gemini. Prueba /clear y sube de nuevo.")
+             return
+
+        system_instruction = (
+            f"Eres un experto analista legal. Documento: '{session['file_name']}'. "
+            "Responde basándote en el documento."
+        )
+        
+        chat_context = []
+        for role, msg in history:
+            chat_context.append(f"{'U' if role == 'user' else 'A'}: {msg}")
+        
+        full_prompt = (
+            f"{system_instruction}\n"
+            "Historial:\n" + "\n".join(chat_context) + "\n"
+            f"Pregunta: {text}\n"
+        )
+        # ----------------------------------------------------
+
         # List of models to try in order of preference (Fastest -> Most Capable -> Legacy)
         model_candidates = [
             'gemini-1.5-flash',
