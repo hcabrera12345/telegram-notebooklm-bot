@@ -23,6 +23,13 @@ DB_NAME = "bot_memory.db"
 # Initialize Gemini
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
+    try:
+        print("Available Models:")
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                print(f" - {m.name}")
+    except Exception as e:
+        print(f"Error listing models: {e}")
 
 # --- Database Management ---
 def init_db():
@@ -177,7 +184,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history = get_chat_history(user_id, session['file_hash'])
         log_interaction(user_id, session['file_hash'], 'user', text)
         
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # DEBUG: List models if generation fails often
+        # for m in genai.list_models():
+        #     if 'generateContent' in m.supported_generation_methods:
+        #         print(m.name)
+        
+        # Using specific version 'gemini-1.5-flash-001' to avoid alias issues
+        model = genai.GenerativeModel('gemini-1.5-flash-001')
         
         # Retrieve the File object using the ID/Name
         # If we have an old record with full URI, extraction might fail, 
