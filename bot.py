@@ -278,11 +278,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         log_interaction(user_id, 'assistant', answer)
         
+        # Helper to send long messages
+        async def send_long_message(text):
+            # Telegram limit is 4096. We use 4000 to be safe.
+            MAX_LENGTH = 4000
+            for i in range(0, len(text), MAX_LENGTH):
+                chunk = text[i:i+MAX_LENGTH]
+                try:
+                    await update.message.reply_text(chunk, parse_mode='Markdown')
+                except Exception as e:
+                    logging.warning(f"Markdown failed for chunk {i}, sending plain text: {e}")
+                    await update.message.reply_text(chunk, parse_mode=None)
+
         try:
-             await update.message.reply_text(answer, parse_mode='Markdown')
+             await send_long_message(answer)
         except Exception as e:
-            logging.warning(f"Markdown failed: {e}")
-            await update.message.reply_text(answer, parse_mode=None)
+            logging.error(f"Send Error: {e}")
+            await update.message.reply_text("Error enviando la respuesta completa.")
 
     except Exception as e:
         logging.error(f"Generation Error: {e}")
