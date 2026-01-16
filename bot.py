@@ -278,9 +278,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         log_interaction(user_id, 'assistant', answer)
         
+        if not response:
+            raise last_error or Exception("No valid models found.")
+
+        # Clean answer, no metadata appended
+        answer = response.text 
+        
+        log_interaction(user_id, 'assistant', answer)
+        
         # Helper to send long messages
         async def send_long_message(text):
-            # Telegram limit is 4096. We use 4000 to be safe.
             MAX_LENGTH = 4000
             for i in range(0, len(text), MAX_LENGTH):
                 chunk = text[i:i+MAX_LENGTH]
@@ -300,6 +307,128 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Generation Error: {e}")
         await update.message.reply_text(f"Lo siento, hubo un error técnico procesando tu solicitud: {str(e)}")
 
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    session = user_sessions.get(user_id)
+    if not session or not session.get('files'):
+        await update.message.reply_text("Primero sube un PDF para que pueda analizar tus instrucciones de voz.")
+        return
+
+    msg = await update.message.reply_text("🎙️ Escuchando y analizando... 🧠")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='upload_voice')
+
+    try:
+        # 1. Download Audio
+        voice_file = await context.bot.get_file(update.message.voice.file_id)
+        voice_data = await voice_file.download_as_bytearray()
+        
+        # Save temp ogg
+        timestamp = int(time.time())
+        temp_audio_path = f"voice_{user_id}_{timestamp}.ogg"
+        with open(temp_audio_path, "wb") as f:
+            f.write(voice_data)
+
+        # 2. Upload to Gemini
+        gemini_audio = genai.upload_file(path=temp_audio_path, mime_type='audio/ogg')
+        
+        # Wait for processing (usually instant for audio, but safe legacy check)
+        while gemini_audio.state.name == "PROCESSING":
+            time.sleep(1)
+            gemini_audio = genai.get_file(gemini_audio.name)
+
+        # 3. Prepare Context (PDFs + Audio)
+        request_content = []
+        file_names = []
+        
+        for file_data in session['files']:
+            try:
+                gemini_id = file_data.get('gemini_id')
+                if gemini_id and "https://" in gemini_id and "/files/" in gemini_id:
+                     gemini_id = "files/" + gemini_id.split("/files/")[-1]
+                
+                f_obj = genai.get_file(gemini_id)
+                request_content.append(f_obj)
+                file_names.append(file_data['name'])
+            except Exception as e:
+                logging.error(f"Error attaching file {file_data['name']}: {e}")
+
+        # Add Audio File
+        request_content.append(gemini_audio)
+        
+        # 4. Prompt
+        system_instruction = (
+            f"Eres un experto analista legal. El usuario te ha enviado una NOTA DE VOZ con instrucciones o preguntas.\n"
+            f"Contexto documental: {len(file_names)} archivos ({', '.join(file_names)}).\n"
+            "**Tu Misión:** Escucha el audio atentamente y responde a la solicitud del usuario usando la información de los documentos.\n"
+            "Si el audio pide un resumen, hazlo. Si hace una pregunta específica, respóndela.\n"
+            "Mantén la misma calidad 'Experto Senior' que en texto escrito."
+        )
+        
+        # Fetch history (optional, maybe keep it simple for voice for now, or include it)
+        history = get_chat_history(user_id)
+        chat_context = [f"{'U' if role == 'user' else 'A'}: {msg}" for role, msg in history]
+        
+        full_prompt = (
+            f"{system_instruction}\n"
+            "--- Historial Reciente ---\n" + "\n".join(chat_context) + "\n"
+            "--------------------------\n"
+            "**INSTRUCCIÓN DE AUDIO:** (Ver archivo de audio adjunto)\n"
+        )
+        request_content.append(full_prompt)
+
+        # 5. Generate
+        gen_config = genai.GenerationConfig(temperature=0.3, max_output_tokens=4000)
+        
+        # Use Flash for audio (faster) or Pro if needed. Let's try candidates.
+        # Note: Pro models handle audio very well.
+        model_candidates = [
+            'gemini-1.5-flash',       # Flash is great for audio latency
+            'gemini-1.5-pro',
+            'gemini-1.5-flash-latest'
+        ]
+
+        response = None
+        last_error = None
+
+        for model_name in model_candidates:
+            try:
+                model = genai.GenerativeModel(model_name, generation_config=gen_config)
+                response = model.generate_content(request_content)
+                break
+            except Exception as e:
+                logging.warning(f"Voice Model {model_name} failed: {e}")
+                last_error = e
+        
+        if not response:
+            raise last_error or Exception("No valid models found for audio.")
+
+        answer = response.text
+        
+        # Cleanup
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
+            
+        # Log (placeholder text for voice)
+        log_interaction(user_id, 'user', '[NOTA DE VOZ]')
+        log_interaction(user_id, 'assistant', answer)
+
+        # Send
+        await msg.delete() # Remove "Listening..." message
+        
+        # Use helper logic (inline here for simplicity or reuse if Refactored, I'll copy the helper logic briefly)
+        MAX_LEGTH = 4000
+        for i in range(0, len(answer), MAX_LEGTH):
+            chunk = answer[i:i+MAX_LEGTH]
+            try:
+                await update.message.reply_text(chunk, parse_mode='Markdown')
+            except:
+                await update.message.reply_text(chunk, parse_mode=None)
+
+    except Exception as e:
+        logging.error(f"Voice Error: {e}")
+        await msg.edit_text(f"Error procesando audio: {e}")
+
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in user_sessions:
         del user_sessions[update.effective_user.id]
@@ -315,6 +444,7 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('clear', clear))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+    app.add_handler(MessageHandler(filters.VOICE, handle_voice)) # New Handler
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
     
     print("Bot Running...")
